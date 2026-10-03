@@ -1,0 +1,54 @@
+# cargo-deny configuration.
+#
+# Advisories, licences and source pinning are CI gates. ash-jsonapi is a
+# library: its dependency tree becomes its consumers' dependency tree, so an
+# advisory or a surprise licence here propagates into every service built on
+# it rather than stopping at our own build.
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[licenses]
+version = 2
+# Permissive only. No copyleft licence is pre-approved — one appearing should
+# fail the gate and be a decision, not a warning someone scrolls past.
+#
+# `BSD-2-Clause` and `ISC` are not matched by anything in the tree today, so
+# `cargo deny` reports them as `license-not-encountered` warnings. They are
+# kept deliberately: both are licences this project would accept without
+# discussion, and pre-approving them means a routine dependency bump does not
+# fail the gate on a question that already has an answer.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    # `unicode-ident`, reached through the proc-macro crates. A data licence
+    # for the Unicode tables, permissive and without an attribution burden.
+    "Unicode-3.0",
+    # `zerocopy` offers BSL-1.0 as an alternative to Apache-2.0; we take the
+    # Apache side, but the expression has to resolve.
+    "BSL-1.0",
+    # The `Unlicense OR MIT` crates (the regex/aho-corasick family, reached
+    # through criterion). We take MIT; Unlicense is listed so the OR resolves
+    # without a clarification.
+    "Unlicense",
+]
+confidence-threshold = 0.9
+
+[bans]
+# A duplicate version is a size and compile-time cost rather than a
+# correctness problem, and in a tree this wide it is usually transitive and
+# not ours to fix — so it is visible, not fatal.
+multiple-versions = "warn"
+# A wildcard dependency in a published library is a promise we cannot keep: it
+# resolves differently for every consumer, at every point in time.
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

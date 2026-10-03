@@ -1,0 +1,146 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# A force-push mid-run leaves the earlier run testing a commit nobody will
+# merge. Superseded runs on a branch are cancelled; `main` is not, so the
+# history of what passed there stays intact.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # Fewer, larger diagnostics; CI is not reading them incrementally.
+  CARGO_INCREMENTAL: 0
+  RUSTFLAGS: -D warnings
+
+jobs:
+  check:
+    name: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # No toolchain named here on purpose: rust-toolchain.toml pins the
+      # channel and the rustfmt/clippy components, so CI and a developer's
+      # machine cannot drift. Bumping it is one edit, in that file.
+      - name: Show toolchain
+        run: rustup show active-toolchain && cargo --version
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --all-features --all-targets -- -D warnings
+
+      # The public contract is the rustdoc as much as the signatures, so a
+      # broken intra-doc link is a real defect rather than cosmetic.
+      - name: Docs
+        run: cargo doc --all-features --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  # The feature matrix is the thing most likely to break silently: a `cfg`
+  # that only ever gets compiled in one combination is not gated, it is just
+  # lucky. Each set is checked on its own rather than only in aggregate.
+  features:
+    name: feature matrix
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: features
+
+      # The standalone claim: the document, error, query and serialization
+      # types with no axum, no runtime and no `ash-*` crate in the tree.
+      - name: No features
+        run: cargo check --no-default-features
+
+      - name: http
+        run: cargo check --no-default-features --features http
+
+      - name: streaming
+        run: cargo check --no-default-features --features streaming
+
+      - name: http + streaming
+        run: cargo check --no-default-features --features http,streaming
+
+      - name: domain
+        run: cargo check --no-default-features --features domain
+
+      - name: all features
+        run: cargo check --all-features
+
+  # The bare build's *tests*, not just its `check`.
+  #
+  # The wire-type tests carry no `required-features`, and running them with
+  # none is what keeps the standalone claim exercised rather than merely
+  # asserted — it silently stopped compiling once before this ran anywhere.
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: test
+
+      - name: Test (no features)
+        run: cargo test --no-default-features --tests
+
+      - name: Test (http + streaming)
+        run: cargo test --no-default-features --features http,streaming --tests
+
+      - name: Test (all features)
+        run: cargo test --all-features
+
+  # rust-version in Cargo.toml is a promise to downstream consumers. Without
+  # this job it is only a comment: the pinned toolchain is far newer, so
+  # nothing else would notice a 2024-edition feature that postdates the floor.
+  # The latest stable runs alongside it, so a new compiler release is noticed
+  # before the pin is bumped. RUSTUP_TOOLCHAIN is what overrides
+  # rust-toolchain.toml — `cargo +1.88` would not.
+  toolchains:
+    name: test (${{ matrix.rust }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        rust: ["1.88", "stable"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv-${{ matrix.rust }}
+      - name: Test
+        run: cargo test --all-features
+        env:
+          RUSTUP_TOOLCHAIN: ${{ matrix.rust }}
+
+  # This crate's dependency tree becomes its consumers' dependency tree, so an
+  # advisory here propagates rather than stopping at our own build.
+  supply-chain:
+    name: supply chain
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories licenses bans sources
+          # The action runs in its own container, where only the toolchain it
+          # installs exists; keep this in step with rust-toolchain.toml.
+          rust-version: "1.97.1"

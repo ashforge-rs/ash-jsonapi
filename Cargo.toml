@@ -1,0 +1,225 @@
+[package]
+name = "ash-jsonapi"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT OR Apache-2.0"
+description = "JSON:API adapter for ash-domain, served over axum."
+repository = "https://github.com/ashforge-rs/ash-jsonapi"
+homepage = "https://github.com/ashforge-rs/ash-jsonapi"
+documentation = "https://docs.rs/ash-jsonapi"
+readme = "README.md"
+authors = ["ashforge-rs contributors"]
+keywords = ["json-api", "rest", "ash", "axum"]
+categories = ["web-programming::http-server"]
+
+# What ships in the published tarball. Tests and benches are 23 of the 59
+# files `cargo package` would otherwise include, and none of them are
+# reachable by a consumer: `cargo test` on a dependency does not run them.
+# They stay in the repository, where CI and `make test` run them; they are
+# just not part of what people download.
+#
+# The examples are kept deliberately — they are `[[example]]` targets the
+# README points at, and docs.rs links them.
+exclude = [
+    "tests/",
+    "benches/",
+    "Makefile",
+    ".github/",
+    "deny.toml",
+    "rust-toolchain.toml",
+]
+
+[features]
+# Only features that gate real code are listed here. A feature that compiles
+# but does nothing is worse than a missing one: it answers `cargo check
+# --features metrics` with success and gives you no metrics. Planned features
+# land here as they are built.
+#
+# `domain` is deliberately not a default: it pulls in ash-domain, which a
+# standalone user does not have. Opt into it if you use ash-domain.
+default = ["http", "validation", "audit"]
+
+# The ash-domain seam: `Mounted`, the schema traits' impls, Record <-> document
+# conversion, and the `resource_schema!` macro. Turn it off for a standalone
+# build — the document, error and serialization types work against your own
+# schema via the `Schema` trait, with no ash-domain in the tree at all.
+domain = ["dep:ash-domain"]
+
+# The axum router and graceful shutdown. The whole HTTP surface; without
+# it you get the document/query/error types only.
+http = ["dep:axum", "dep:tokio"]
+
+# The audit trail: `audit::Audit`, an `after` hook that records one event per
+# operation — who did what to which resource, and how it ended — plus
+# `Context::scope()`, which binds the correlation id and principal onto every
+# line logged inside it.
+#
+# On by default: a REST service that does not record its authorization
+# decisions is a liability, so this is opt-out rather than opt-in. Registering
+# the hook is still yours (see `audit`), because where the records go is a
+# deployment decision this crate should not make.
+audit = ["dep:ash-log"]
+
+# JSONL responses: `Accept: application/jsonl` on a collection streams one
+# resource object per line, rendered and sent as rows arrive rather than
+# buffered. `futures-core` is already in the tree via axum, so the only cost
+# is the trait it names.
+streaming = ["http", "dep:futures-core"]
+
+# Validate request documents against a JSON Schema derived from the domain's
+# own schema, before anything reaches the data layer. Each failure becomes a
+# JSON:API error with a source.pointer, since the validator reports the
+# instance location as a JSON Pointer already.
+validation = ["dep:ash-jsonschema"]
+
+[dependencies]
+ash-domain = { version = "0.1", optional = true }
+ash-log = { version = "0.1", optional = true }
+ash-jsonschema = { version = "0.1", optional = true }
+
+# Core: the document/query/error types work with default-features = false.
+# `http` is the canonical StatusCode — no server, no runtime, and it is what
+# axum re-exports, so a status crosses the feature boundary unchanged.
+# Renamed here because the crate name collides with our `http` feature.
+http-types = { package = "http", version = "1" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+axum = { version = "0.8", optional = true }
+# Only the `Stream` trait; axum already depends on this, so declaring it adds
+# a manifest line rather than a compilation.
+futures-core = { version = "0.3", optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "signal", "macros"], optional = true }
+
+# The example serves over HTTP, so it needs the (default) `http` feature.
+# It is standalone — no `domain` — which is what it exists to demonstrate.
+[dev-dependencies]
+futures-util = "0.3"
+tower = { version = "0.5", features = ["util"] }
+
+# Benchmarks. `default-features = false` drops the HTML/plot reporting and its
+# plotters + rayon tree: the numbers go to stdout, which is what a local
+# `make bench` reads, and the dependency stays small.
+criterion = { version = "0.5", default-features = false, features = [
+    "cargo_bench_support",
+] }
+
+[[example]]
+name = "todo_get"
+required-features = ["http", "validation", "streaming"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+# Writes, relationships, validation and hooks — the half `todo_get` does not
+# reach. Standalone too: no `domain`, and no `streaming` since nothing here
+# streams.
+[[example]]
+name = "blog"
+required-features = ["http", "validation"]
+
+# Where a response spends its time: the serializer, and the document render.
+# Needs no feature beyond the default core types, so it measures the same code
+# a standalone user runs.
+[[bench]]
+name = "serialize"
+harness = false
+
+# Tests, gated by what each one actually reaches for.
+#
+# Without these, `cargo test --no-default-features` does not fail a test — it
+# fails to *compile*, because every HTTP test names `crud`, `extract` or
+# `api!`, which are not there. A test that cannot build under the feature set
+# it is run with says nothing about the crate; declaring the requirement is
+# what makes the feature matrix meaningful for tests as well as for `check`.
+#
+# The wire types — document, error, query, serialize, attribute, context,
+# i18n — are deliberately absent from this list. They compile with no
+# features at all, and running them bare is what keeps the standalone claim
+# (`default-features = false` and no `ash-*` crate in the tree) honest rather
+# than merely documented.
+
+[[test]]
+name = "validation"
+path = "tests/validation.rs"
+required-features = ["validation"]
+
+# The ash-domain seam. Runs only with `--features domain`, which is what
+# `required-features` is for: the integration is off by default, and a test
+# that names `ash-domain` cannot compile without it in the tree.
+[[test]]
+name = "domain"
+path = "tests/domain.rs"
+required-features = ["domain"]
+
+# The live half: a real `Domain` over the in-memory data layer, served through
+# the generated routes. Needs the HTTP surface as well as the domain, since
+# what it exercises is a request going all the way through the pipeline.
+[[test]]
+name = "domain_live"
+path = "tests/domain_live.rs"
+required-features = ["domain", "http", "validation"]
+
+[[test]]
+name = "audit"
+path = "tests/audit.rs"
+required-features = ["audit"]
+
+[[test]]
+name = "files_safety"
+path = "tests/files_safety.rs"
+required-features = ["http"]
+
+[[test]]
+name = "upload_limits"
+path = "tests/upload_limits.rs"
+required-features = ["http"]
+
+[[test]]
+name = "files"
+path = "tests/files.rs"
+required-features = ["http", "validation"]
+
+[[test]]
+name = "hook"
+path = "tests/hook.rs"
+required-features = ["http", "validation"]
+
+[[test]]
+name = "hook_optin"
+path = "tests/hook_optin.rs"
+required-features = ["http", "validation"]
+
+[[test]]
+name = "hook_wired"
+path = "tests/hook_wired.rs"
+required-features = ["http", "validation"]
+
+[[test]]
+name = "registry"
+path = "tests/registry.rs"
+required-features = ["http", "validation"]
+
+[[test]]
+name = "sortable"
+path = "tests/sortable.rs"
+required-features = ["http", "validation"]
+
+# The JSONL half: `STREAM` sends lines, `INGEST` reads them, and both are
+# behind `streaming` even where the test never names `jsonl` itself.
+[[test]]
+name = "streaming"
+path = "tests/streaming.rs"
+required-features = ["http", "validation", "streaming"]
+
+[[test]]
+name = "ingest"
+path = "tests/ingest.rs"
+required-features = ["http", "validation", "streaming"]
+
+[[test]]
+name = "ingest_only"
+path = "tests/ingest_only.rs"
+required-features = ["http", "validation", "streaming"]

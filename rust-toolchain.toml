@@ -1,0 +1,8 @@
+# Pinned so CI and a developer's machine cannot drift, and so `make lint`
+# means the same thing in both. This is the *development* toolchain, not the
+# crate's floor: `rust-version` in Cargo.toml declares that (1.88), and the
+# `toolchains` CI job is what holds it honest.
+[toolchain]
+channel = "1.97.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"
