@@ -101,7 +101,7 @@ tower = { version = "0.5", features = ["util"] }
 # Benchmarks. `default-features = false` drops the HTML/plot reporting and its
 # plotters + rayon tree: the numbers go to stdout, which is what a local
 # `make bench` reads, and the dependency stays small.
-criterion = { version = "0.5", default-features = false, features = [
+criterion = { version = "0.8", default-features = false, features = [
     "cargo_bench_support",
 ] }
 
